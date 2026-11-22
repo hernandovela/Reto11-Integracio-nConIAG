@@ -1,5 +1,15 @@
+import java.text.Normalizer
+
 plugins {
     id 'com.android.application'
+}
+
+def modulePath = layout.projectDirectory.asFile.absolutePath
+def onWindows = System.getProperty('os.name').startsWith('Windows')
+if (onWindows && !Normalizer.isNormalized(modulePath, Normalizer.Form.NFC)) {
+    // The Android resource parser normalizes file paths to NFC when reading generated XML.
+    def cacheKey = UUID.nameUUIDFromBytes(modulePath.getBytes('UTF-8'))
+    layout.buildDirectory.set(new File(gradle.gradleUserHomeDir, "caches/aula-iag/${cacheKey}/app"))
 }
 
 android {

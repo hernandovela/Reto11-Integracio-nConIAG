@@ -13,6 +13,9 @@ El [diseño de Aula IAG](docs/diseno-aula-iag.pdf) presenta las pantallas de ini
 3. Selecciona la configuración `app` y ejecuta en un emulador o dispositivo con Android 8.0 (API 26) o superior.
 4. Elige **Probar demostración** para probar ejemplos locales o **Continuar con ChatGPT** para generar respuestas.
 
+
+En Windows, si la ruta del proyecto usa acentos en forma Unicode descompuesta, los archivos generados del módulo se colocan en la caché de Gradle. Android Studio conserva el flujo normal de sincronización y ejecución.
+
 ## Conectar ChatGPT
 
 1. Pulsa **Continuar con ChatGPT**. Se abrirá OpenAI en el navegador del dispositivo.
