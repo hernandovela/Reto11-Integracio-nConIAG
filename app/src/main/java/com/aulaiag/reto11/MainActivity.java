@@ -3,10 +3,12 @@ package com.aulaiag.reto11;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.app.PendingIntent;
 import android.content.ActivityNotFoundException;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Intent;
+import android.content.IntentSender;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -47,9 +49,9 @@ import static com.aulaiag.reto11.StudyUi.PAPER;
 import static com.aulaiag.reto11.StudyUi.QUESTION;
 
 public final class MainActivity extends Activity {
-    private static final Uri USAGE = Uri.parse("https://chatgpt.com/settings/usage");
-    private static final Uri PLAN_HELP = Uri.parse(
-            "https://help.openai.com/en/articles/20001542-using-your-chatgpt-plan-in-other-apps-and-sites");
+    private static final Uri INSTITUTIONAL_GEMINI = Uri.parse("https://gemini.google.com/");
+    private static final String PROJECT_PREFERENCE = "gemini_project_id";
+    private static final int GOOGLE_RESOLUTION = 901;
     private static final int MAX_MESSAGES = 21;
     private static final int MAX_PROMPT_LENGTH = 4000;
     private static final String[] SHORTCUTS = {"Explicar", "Resumir", "Practicar"};
@@ -77,24 +79,26 @@ public final class MainActivity extends Activity {
     };
 
     private enum Screen { START, CHAT, ACCOUNT }
-    private record ReplyIssue(String message, boolean usage, boolean reconnect) { }
+    private record ReplyIssue(String message, boolean reconnect) { }
 
     private static final class Conversation {
-        private final List<ResponsesClient.Message> messages = new ArrayList<>();
+        private final List<GeminiClient.Message> messages = new ArrayList<>();
         private Screen screen = Screen.START;
         private boolean demo;
         private String draft = "";
         private ReplyIssue issue;
-        private String owner;
+        private GeminiAuth.Session session;
+        private boolean geminiVerified;
+        private boolean awaitingGoogle;
+        private boolean refreshing;
     }
 
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
-    private final ResponsesClient client = new ResponsesClient();
-    private ChatGptAuth auth;
+    private final GeminiClient client = new GeminiClient();
+    private GeminiAuth auth;
     private StudyUi ui;
     private Conversation conversation;
-    private ChatGptAuth.Account account;
-    private ChatGptAuth.Attempt pendingAttempt;
+    private String projectId;
     private FrameLayout root;
     private EditText composer;
     private ScrollView timeline;
@@ -104,16 +108,16 @@ public final class MainActivity extends Activity {
     private String partialReply = "";
     private boolean authBusy;
     private String authStatus;
-    private int authOperation;
     private boolean destroyed;
 
     @Override
     protected void onCreate(Bundle savedState) {
         super.onCreate(savedState);
         ui = new StudyUi(this);
-        auth = new ChatGptAuth(this);
         Conversation previous = (Conversation) getLastNonConfigurationInstance();
         conversation = previous == null ? new Conversation() : previous;
+        projectId = getPreferences(MODE_PRIVATE).getString(PROJECT_PREFERENCE, "");
+        authBusy = conversation.awaitingGoogle;
         root = new FrameLayout(this);
         root.setBackgroundColor(BACKGROUND);
         root.setFocusableInTouchMode(true);
@@ -123,14 +127,14 @@ public final class MainActivity extends Activity {
             getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
                     android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT, this::back);
         }
-        refreshAccount(previous == null);
+        render();
     }
 
     @Override
     public Object onRetainNonConfigurationInstance() {
         keepDraft();
         if (sending) {
-            conversation.issue = new ReplyIssue("La solicitud se interrumpió. Puedes reintentar.", false, false);
+            conversation.issue = new ReplyIssue("La solicitud se interrumpió. Puedes reintentar.", false);
         }
         return conversation;
     }
@@ -138,8 +142,8 @@ public final class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         destroyed = true;
-        if (pendingAttempt != null) {
-            auth.cancel(pendingAttempt);
+        if (auth != null) {
+            auth.close();
         }
         worker.shutdownNow();
         super.onDestroy();
@@ -153,13 +157,11 @@ public final class MainActivity extends Activity {
     }
 
     private void back() {
-        if (authBusy && pendingAttempt == null) {
+        if (authBusy) {
             return;
         }
-        if (pendingAttempt != null) {
-            cancelSignIn();
-        } else if (conversation.screen == Screen.ACCOUNT) {
-            showScreen(conversation.demo || canUsePlan() ? Screen.CHAT : Screen.START);
+        if (conversation.screen == Screen.ACCOUNT) {
+            showScreen(conversation.demo || canChat() ? Screen.CHAT : Screen.START);
         } else if (conversation.screen == Screen.CHAT) {
             if (!sending) {
                 showScreen(Screen.START);
@@ -199,32 +201,12 @@ public final class MainActivity extends Activity {
         }
     }
 
-    private void refreshAccount(boolean firstLaunch) {
-        authBusy = true;
-        authStatus = "Verificando la sesión…";
-        render();
-        worker.execute(() -> {
-            try {
-                ChatGptAuth.Account current = auth.activeAccount();
-                onUi(() -> {
-                    authBusy = false;
-                    authStatus = null;
-                    account = current;
-                    if (firstLaunch && canUsePlan()) {
-                        enterLiveChat();
-                    } else {
-                        render();
-                        confirmPlanUse();
-                    }
-                });
-            } catch (IOException problem) {
-                onUi(() -> failAuth(problem));
-            }
-        });
+    private boolean hasProject() {
+        return !projectId.isEmpty();
     }
 
-    private boolean canUsePlan() {
-        return account != null && account.signedIn() && account.planEnabled();
+    private boolean canChat() {
+        return hasProject() && conversation.session != null;
     }
 
     private boolean reconnectRequired() {
@@ -278,26 +260,36 @@ public final class MainActivity extends Activity {
         ui.block(body, ui.heading("Tu espacio\nde estudio", 36), 12);
         ui.block(body, ui.text("Pregunta, resume y practica.\nEmpieza con el tema que quieras.",
                 16, MUTED, false), 12);
-        ui.block(body, infoPanel("Estudia a tu ritmo",
-                "Usa tu plan de ChatGPT para las consultas compatibles."), 32);
-        ui.block(body, ui.button("Cómo funciona el acceso", false, () -> openLink(PLAN_HELP)), 8);
+        String access = hasProject()
+                ? "Conecta tu cuenta UNAL para usar Gemini en Aula IAG."
+                : "Abre Gemini en el navegador y elige tu cuenta institucional UNAL.";
+        ui.block(body, infoPanel("Estudia con Gemini", access), 32);
         body.addView(new Space(this), new LinearLayout.LayoutParams(1, 0, 1f));
         addStatus(body);
 
-        boolean resume = canUsePlan() && !reconnectRequired();
-        Button connect = ui.button(resume ? "Volver a la conversación" : "Continuar con ChatGPT",
-                true, () -> {
-                    if (resume) {
-                        enterLiveChat();
-                    } else {
-                        startSignIn(account == null ? null : account.clientId());
-                    }
-                });
-        connect.setEnabled(!authBusy);
-        ui.block(body, connect, 22);
+        if (hasProject()) {
+            boolean resume = canChat() && !reconnectRequired();
+            Button connect = ui.button(resume ? "Volver a la conversación" : "Conectar cuenta UNAL",
+                    true, () -> {
+                        if (resume) {
+                            enterLiveChat();
+                        } else {
+                            showScreen(Screen.ACCOUNT);
+                            connectAccount();
+                        }
+                    });
+            connect.setEnabled(!authBusy);
+            ui.block(body, connect, 22);
+        } else {
+            ui.block(body, ui.button("Abrir Gemini institucional", true, this::openInstitutionalGemini), 22);
+        }
         Button demo = ui.button("Probar demostración", false, this::enterDemo);
         demo.setEnabled(!authBusy);
         ui.block(body, demo, 10);
+        Button settings = ui.button("Configurar Gemini en Aula IAG", false,
+                () -> showScreen(Screen.ACCOUNT));
+        settings.setEnabled(!authBusy);
+        ui.block(body, settings, 10);
         return page(body);
     }
 
@@ -330,11 +322,13 @@ public final class MainActivity extends Activity {
         body.addView(timeline, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
+        boolean chatActions = !sending && !authBusy
+                && (conversation.demo || canChat() && !reconnectRequired());
         LinearLayout shortcuts = ui.row();
         for (int index = 0; index < SHORTCUTS.length; index++) {
             int action = index;
             Button button = ui.button(SHORTCUTS[index], false, () -> preparePrompt(action));
-            button.setEnabled(!sending && !authBusy);
+            button.setEnabled(chatActions);
             button.setPadding(ui.dp(4), ui.dp(4), ui.dp(4), ui.dp(4));
             LinearLayout.LayoutParams slot = new LinearLayout.LayoutParams(
                     0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
@@ -359,25 +353,28 @@ public final class MainActivity extends Activity {
         composer.setHint("Escribe tu pregunta");
         composer.setFilters(new InputFilter[]{new InputFilter.LengthFilter(MAX_PROMPT_LENGTH)});
         composer.setText(conversation.draft);
-        composer.setEnabled(!sending && !authBusy);
+        composer.setEnabled(chatActions);
         if (Build.VERSION.SDK_INT >= 34) {
             composer.setAutoHandwritingEnabled(false);
         }
         inputRow.addView(composer, new LinearLayout.LayoutParams(
                 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         Button send = ui.button("Enviar", true, this::sendPrompt);
-        send.setEnabled(!sending && !authBusy);
+        send.setEnabled(chatActions);
         addCompactButton(inputRow, send);
         ui.block(body, inputRow, 8);
 
         if (conversation.demo) {
             ui.block(body, ui.text("Demostración · ejemplos locales", 12, GREEN, true), 8);
-        } else if (canUsePlan()) {
-            LinearLayout plan = ui.row();
-            plan.addView(ui.text("Usando tu plan de ChatGPT", 12, GREEN, true),
-                    new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
-            addCompactButton(plan, ui.button("Gestionar uso", false, () -> openLink(USAGE)));
-            ui.block(body, plan, 4);
+        } else {
+            String status;
+            if (!canChat()) {
+                status = "Gemini · Conexión pendiente";
+            } else {
+                status = conversation.geminiVerified
+                        ? "Gemini · Conectado" : "Gemini · Proyecto " + projectId;
+            }
+            ui.block(body, ui.text(status, 12, GREEN, true), 8);
         }
         showMessages();
         return body;
@@ -399,40 +396,81 @@ public final class MainActivity extends Activity {
         addCompactButton(header, ui.button("Volver", false, this::back));
         ui.block(body, header, 0);
 
-        boolean signedIn = account != null && account.signedIn();
-        if (signedIn) {
-            LinearLayout panel = infoPanel("Sesión conectada", account.label());
-            ui.block(panel, ui.text(account.planEnabled() ? "Uso del plan autorizado"
-                    : "Uso del plan pendiente de autorización", 14, MUTED, false), 5);
-            ui.block(body, panel, 20);
-        } else {
-            ui.block(body, infoPanel("Sesión sin conectar",
-                    "Conecta una cuenta de ChatGPT para generar respuestas."), 20);
-        }
-        if (!canUsePlan() || reconnectRequired()) {
-            Button connect = ui.button("Continuar con ChatGPT", true,
-                    () -> startSignIn(account == null ? null : account.clientId()));
+        GeminiAuth.Session session = conversation.session;
+        String accountDetail = session == null ? "Sesión sin conectar" : session.email();
+        ui.block(body, infoPanel("Cuenta UNAL", accountDetail), 20);
+        if (hasProject() && (session == null || reconnectRequired())) {
+            Button connect = ui.button("Conectar cuenta UNAL", true, this::connectAccount);
             connect.setEnabled(!authBusy && !sending);
-            ui.block(body, connect, 22);
-        } else if (conversation.demo) {
-            ui.block(body, ui.button("Abrir conversación", true, this::enterLiveChat), 20);
+            ui.block(body, connect, 12);
         }
-        if (signedIn) {
-            ui.block(body, ui.button("Gestionar uso en ChatGPT", false, () -> openLink(USAGE)), 16);
+        if (canChat() && !reconnectRequired()) {
+            Button openChat = ui.button("Abrir conversación", true, this::enterLiveChat);
+            openChat.setEnabled(!authBusy && !sending);
+            ui.block(body, openChat, 12);
         }
-        Button change = ui.button(signedIn ? "Cambiar cuenta" : "Elegir una cuenta", false,
-                this::chooseAccount);
-        change.setEnabled(!authBusy && !sending);
-        ui.block(body, change, 10);
-        if (signedIn) {
-            Button signOut = ui.button("Cerrar sesión", false, this::signOut);
+        if (session != null && hasProject()) {
+            Button switchAccount = ui.button("Cambiar cuenta", false, this::chooseAnotherAccount);
+            switchAccount.setEnabled(!authBusy && !sending);
+            ui.block(body, switchAccount, 8);
+        }
+        if (session != null) {
+            Button signOut = ui.button("Cerrar sesión en Aula IAG", false, this::signOut);
             signOut.setEnabled(!authBusy && !sending);
-            ui.block(body, signOut, 10);
+            ui.block(body, signOut, 8);
         }
         addStatus(body);
-        ui.block(body, ui.text("Puedes revisar y administrar tus conexiones en ChatGPT.",
-                14, MUTED, false), 24);
+
+        String projectDetail;
+        if (!hasProject()) {
+            projectDetail = "Falta configurar un proyecto con la API de Gemini habilitada.";
+        } else if (conversation.geminiVerified) {
+            projectDetail = "Gemini respondió desde este proyecto.";
+        } else {
+            projectDetail = "Proyecto configurado. La primera consulta comprobará el acceso a Gemini.";
+        }
+        LinearLayout project = infoPanel("Proyecto Google Cloud", projectDetail);
+        EditText editor = new EditText(this);
+        editor.setTextColor(INK);
+        editor.setHintTextColor(MUTED);
+        editor.setTextSize(15);
+        editor.setSingleLine(true);
+        editor.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        editor.setHint("ID del proyecto");
+        editor.setText(projectId);
+        editor.setEnabled(!authBusy && !sending);
+        ui.block(project, editor, 8);
+        Button save = ui.button("Guardar proyecto", false, () -> saveProject(editor));
+        save.setEnabled(!authBusy && !sending);
+        ui.block(project, save, 8);
+        ui.block(body, project, 24);
+
+        ui.block(body, ui.button("Abrir Gemini institucional", false, this::openInstitutionalGemini), 18);
+        ui.block(body, ui.text("Elige tu cuenta institucional UNAL en el navegador.",
+                14, MUTED, false), 6);
         return page(body);
+    }
+
+    private void saveProject(EditText editor) {
+        String value = editor.getText().toString().trim();
+        if (!value.isEmpty() && !value.matches("[a-z][a-z0-9-]{4,28}[a-z0-9]")) {
+            editor.setError("Escribe el ID de Google Cloud de 6 a 30 caracteres. "
+                    + "Usa minúsculas, números y guiones.");
+            return;
+        }
+        if (!projectId.equals(value)) {
+            projectId = value;
+            getPreferences(MODE_PRIVATE).edit().putString(PROJECT_PREFERENCE, projectId).apply();
+            conversation.geminiVerified = false;
+            if (!conversation.demo) {
+                clearConversation();
+            }
+        }
+        authStatus = null;
+        hideKeyboard();
+        render();
+        Toast.makeText(this, hasProject() ? "Proyecto guardado" : "Proyecto retirado",
+                Toast.LENGTH_SHORT).show();
     }
 
     private LinearLayout infoPanel(String title, String details) {
@@ -451,9 +489,6 @@ public final class MainActivity extends Activity {
         TextView status = ui.text(authStatus, 14, authBusy ? GREEN : ERROR, true);
         status.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
         ui.block(body, status, 15);
-        if (pendingAttempt != null) {
-            ui.block(body, ui.button("Cancelar acceso", false, this::cancelSignIn), 6);
-        }
     }
 
     private void showMessages() {
@@ -468,7 +503,7 @@ public final class MainActivity extends Activity {
                     : "Escribe una pregunta o elige un atajo para empezar.";
             ui.block(messageList, infoPanel("¿Qué quieres aprender?", detail), 11);
         }
-        for (ResponsesClient.Message message : conversation.messages) {
+        for (GeminiClient.Message message : conversation.messages) {
             addMessage(message.role().equals("user"), message.text(), true);
         }
         if (sending) {
@@ -480,11 +515,8 @@ public final class MainActivity extends Activity {
             TextView error = ui.text(issue.message(), 14, ERROR, true);
             error.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
             ui.block(messageList, error, 14);
-            if (issue.usage()) {
-                ui.block(messageList, ui.button("Gestionar uso", true, () -> openLink(USAGE)), 7);
-            }
             if (issue.reconnect()) {
-                ui.block(messageList, ui.button("Continuar con ChatGPT", true,
+                ui.block(messageList, ui.button("Conectar cuenta UNAL", true,
                         () -> showScreen(Screen.ACCOUNT)), 7);
             } else {
                 ui.block(messageList, ui.button("Reintentar", false, this::requestReply), 7);
@@ -555,7 +587,7 @@ public final class MainActivity extends Activity {
     }
 
     private void sendPrompt() {
-        if (sending || authBusy) {
+        if (sending || authBusy || !conversation.demo && (!canChat() || reconnectRequired())) {
             return;
         }
         String prompt = composer.getText().toString().trim();
@@ -570,13 +602,13 @@ public final class MainActivity extends Activity {
         while (conversation.messages.size() >= MAX_MESSAGES - 1) {
             conversation.messages.subList(0, 2).clear();
         }
-        conversation.messages.add(new ResponsesClient.Message("user", prompt));
+        conversation.messages.add(new GeminiClient.Message("user", prompt));
         composer.setText("");
         conversation.draft = "";
         hideKeyboard();
 
         if (conversation.demo) {
-            conversation.messages.add(new ResponsesClient.Message("assistant", exampleReply(prompt)));
+            conversation.messages.add(new GeminiClient.Message("assistant", exampleReply(prompt)));
             showMessages();
         } else {
             requestReply();
@@ -597,21 +629,22 @@ public final class MainActivity extends Activity {
         if (sending || authBusy || conversation.messages.isEmpty()) {
             return;
         }
-        if (!canUsePlan()) {
-            conversation.issue = new ReplyIssue("Vuelve a conectar tu cuenta para enviar la pregunta.",
-                    false, true);
+        if (!canChat() || reconnectRequired()) {
+            conversation.issue = new ReplyIssue("Conecta tu cuenta UNAL para enviar la pregunta.", true);
             showMessages();
             return;
         }
         sending = true;
         partialReply = "";
         conversation.issue = null;
-        List<ResponsesClient.Message> history = new ArrayList<>(conversation.messages);
+        String token = conversation.session.accessToken();
+        String targetProject = projectId;
+        List<GeminiClient.Message> history = new ArrayList<>(conversation.messages);
         render();
         worker.execute(() -> {
             try {
                 long[] reportedAt = {0};
-                String result = client.reply(auth.accessToken(), history, partial -> {
+                String result = client.reply(token, targetProject, history, partial -> {
                     long now = SystemClock.elapsedRealtime();
                     if (now - reportedAt[0] >= 70) {
                         reportedAt[0] = now;
@@ -621,11 +654,12 @@ public final class MainActivity extends Activity {
                 onUi(() -> {
                     sending = false;
                     partialReply = "";
-                    conversation.messages.add(new ResponsesClient.Message("assistant", result));
+                    conversation.geminiVerified = true;
+                    conversation.messages.add(new GeminiClient.Message("assistant", result));
                     render();
                 });
             } catch (IOException problem) {
-                handleReplyError(problem);
+                onUi(() -> handleReplyError(problem));
             }
         });
     }
@@ -643,39 +677,21 @@ public final class MainActivity extends Activity {
     }
 
     private void handleReplyError(IOException problem) {
-        boolean usage = false;
-        boolean reconnect = false;
         String explanation = "No se pudo recibir la respuesta. Revisa la conexión y reintenta.";
-        ChatGptAuth.Account updated = null;
-        if (problem instanceof ResponsesClient.ApiException apiError) {
-            usage = "subscription_sharing_usage_limit_exceeded".equals(apiError.code)
-                    || "subscription_sharing_usage_unavailable".equals(apiError.code);
+        boolean reconnect = false;
+        if (problem instanceof GeminiClient.ApiException apiError) {
             reconnect = apiError.status == 401;
-            explanation = apiError.getMessage();
-        } else if (problem instanceof ChatGptAuth.AuthException authError) {
-            reconnect = authError.signInRequired() || "plan_not_enabled".equals(authError.code());
-            explanation = authError.getMessage();
-        }
-        if (reconnect) {
-            try {
-
-                updated = auth.activeAccount();
-            } catch (IOException ignored) {
-                // Authorization can still be retried after a local storage error.
+            if (reconnect || apiError.status == 403 || apiError.status == 404) {
+                conversation.geminiVerified = false;
+            }
+            if (apiError.getMessage() != null) {
+                explanation = apiError.getMessage();
             }
         }
-        ReplyIssue issue = new ReplyIssue(explanation == null ? "No se pudo completar la consulta."
-                : explanation, usage, reconnect);
-        ChatGptAuth.Account refreshedAccount = updated;
-        onUi(() -> {
-            if (issue.reconnect()) {
-                account = refreshedAccount;
-            }
-            sending = false;
-            partialReply = "";
-            conversation.issue = issue;
-            render();
-        });
+        sending = false;
+        partialReply = "";
+        conversation.issue = new ReplyIssue(explanation, reconnect);
+        render();
     }
 
     private void askNewConversation() {
@@ -699,21 +715,19 @@ public final class MainActivity extends Activity {
             clearConversation();
         }
         conversation.demo = true;
-        conversation.owner = null;
         showScreen(Screen.CHAT);
     }
 
     private void enterLiveChat() {
-        if (conversation.demo || !account.clientId().equals(conversation.owner)) {
+        if (!canChat()) {
+            showScreen(Screen.ACCOUNT);
+            return;
+        }
+        if (conversation.demo) {
             clearConversation();
         }
         conversation.demo = false;
-        conversation.owner = account.clientId();
-        if (conversation.issue != null && conversation.issue.reconnect()) {
-            conversation.issue = new ReplyIssue("Ya puedes reintentar la consulta.", false, false);
-        }
         showScreen(Screen.CHAT);
-        confirmPlanUse();
     }
 
     private void clearConversation() {
@@ -730,199 +744,121 @@ public final class MainActivity extends Activity {
     }
 
 
-    private void startSignIn(String clientId) {
-        if (authBusy || sending) {
+    private final GeminiAuth.Listener login = new GeminiAuth.Listener() {
+        @Override
+        public void onResolution(PendingIntent pending) {
+            conversation.awaitingGoogle = true;
+            try {
+                startIntentSenderForResult(pending.getIntentSender(), GOOGLE_RESOLUTION, null, 0, 0, 0);
+            } catch (IntentSender.SendIntentException exception) {
+                auth.cancelPending();
+                finishLoginError("Google no pudo abrir la autorización.");
+            }
+        }
+
+        @Override
+        public void onSuccess(GeminiAuth.Session session) {
+            GeminiAuth.Session previous = conversation.session;
+            if (previous == null || !previous.subject().equals(session.subject())) {
+                conversation.geminiVerified = false;
+                clearConversation();
+            } else if (reconnectRequired()) {
+                conversation.issue = new ReplyIssue("Cuenta reconectada. Ya puedes reintentar.", false);
+            }
+            conversation.session = session;
+            conversation.awaitingGoogle = false;
+            conversation.refreshing = false;
+            authBusy = false;
+            authStatus = null;
+            enterLiveChat();
+        }
+
+        @Override
+        public void onError(String message) {
+            finishLoginError(message);
+        }
+    };
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode != GOOGLE_RESOLUTION || !conversation.awaitingGoogle) {
+            return;
+        }
+        conversation.awaitingGoogle = false;
+        if (resultCode == RESULT_OK) {
+            GeminiAuth.Session previous = conversation.refreshing ? conversation.session : null;
+            authorization().finishSignIn(data, previous, login);
+        } else {
+            authorization().cancelPending();
+            finishLoginError("Se canceló la conexión con Google.");
+        }
+    }
+
+    private void connectAccount() {
+        authorizeAccount(conversation.session);
+    }
+
+    private void chooseAnotherAccount() {
+        authorizeAccount(null);
+    }
+
+    private void authorizeAccount(GeminiAuth.Session previous) {
+        if (authBusy || sending || !hasProject()) {
             return;
         }
         authBusy = true;
-        authStatus = "Preparando el acceso…";
-        int operation = ++authOperation;
+        conversation.refreshing = previous != null;
+        authStatus = "Conectando cuenta UNAL…";
         render();
-        worker.execute(() -> {
-            try {
-                ChatGptAuth.Attempt attempt = auth.beginSignIn(clientId, true);
-                runOnUiThread(() -> {
-                    if (destroyed || isFinishing() || operation != authOperation) {
-                        auth.cancel(attempt);
-                        return;
-                    }
-                    pendingAttempt = attempt;
-                    authStatus = "Completa el ingreso y la autorización en el navegador.";
-                    render();
-                    if (openLink(attempt.authorizationUri())) {
-                        worker.execute(() -> finishSignIn(attempt, operation));
-                    } else {
-                        cancelSignIn();
-                    }
-                });
-            } catch (IOException problem) {
-                onUi(() -> {
-                    if (operation == authOperation) {
-                        failAuth(problem);
-                    }
-                });
-            }
-        });
-    }
-
-    private void finishSignIn(ChatGptAuth.Attempt attempt, int operation) {
-        try {
-            ChatGptAuth.Account connected = auth.finishSignIn(attempt);
-            onUi(() -> {
-                if (operation == authOperation) {
-                    account = connected;
-                    pendingAttempt = null;
-                    authBusy = false;
-                    authStatus = null;
-                    if (canUsePlan()) {
-                        enterLiveChat();
-                    } else {
-                        showScreen(Screen.ACCOUNT);
-                    }
-                }
-            });
-        } catch (IOException problem) {
-            onUi(() -> {
-                if (operation == authOperation) {
-                    failAuth(problem);
-                }
-            });
+        if (previous == null) {
+            authorization().signIn(login);
+        } else {
+            authorization().refresh(previous, login);
         }
     }
 
-    private void cancelSignIn() {
-        authOperation++;
-        ChatGptAuth.Attempt attempt = pendingAttempt;
-        pendingAttempt = null;
+    private GeminiAuth authorization() {
+        if (auth == null) {
+            auth = new GeminiAuth(this);
+        }
+        return auth;
+    }
+
+    private void finishLoginError(String message) {
+        conversation.awaitingGoogle = false;
+        conversation.refreshing = false;
         authBusy = false;
-        authStatus = "Acceso cancelado.";
-        if (attempt != null) {
-            auth.cancel(attempt);
-        }
+        authStatus = message;
         render();
-    }
-
-    private void chooseAccount() {
-        authBusy = true;
-        authStatus = "Consultando las cuentas…";
-        render();
-        worker.execute(() -> {
-            try {
-                List<ChatGptAuth.Account> accounts = auth.listAccounts();
-                onUi(() -> {
-                    authBusy = false;
-                    authStatus = null;
-                    render();
-                    CharSequence[] options = new CharSequence[accounts.size() + 1];
-                    for (int index = 0; index < accounts.size(); index++) {
-                        options[index] = accounts.get(index).label();
-                    }
-                    options[accounts.size()] = "Conectar otra cuenta";
-                    new AlertDialog.Builder(this)
-                            .setTitle("Cambiar cuenta")
-                            .setItems(options, (dialog, index) -> {
-                                if (index == accounts.size()) {
-                                    startSignIn(null);
-                                } else {
-                                    selectAccount(accounts.get(index));
-                                }
-                            })
-                            .setNegativeButton("Cancelar", null)
-                            .show();
-                });
-            } catch (IOException problem) {
-                onUi(() -> failAuth(problem));
-            }
-        });
-    }
-
-    private void selectAccount(ChatGptAuth.Account selected) {
-        if (!selected.signedIn()) {
-            startSignIn(selected.clientId());
-            return;
-        }
-        authBusy = true;
-        authStatus = "Abriendo la sesión…";
-        render();
-        worker.execute(() -> {
-            try {
-                ChatGptAuth.Account current = auth.selectAccount(selected.clientId());
-                onUi(() -> {
-                    authBusy = false;
-                    authStatus = null;
-                    account = current;
-                    if (canUsePlan()) {
-                        enterLiveChat();
-                    } else {
-                        render();
-                    }
-                });
-            } catch (IOException problem) {
-                onUi(() -> failAuth(problem));
-            }
-        });
     }
 
     private void signOut() {
+        GeminiAuth.Session session = conversation.session;
+        conversation.session = null;
+        conversation.geminiVerified = false;
+        if (!conversation.demo) {
+            clearConversation();
+        }
         authBusy = true;
         authStatus = "Cerrando sesión…";
         render();
-        worker.execute(() -> {
-            try {
-                boolean remote = auth.signOut();
-                ChatGptAuth.Account current = auth.activeAccount();
-                onUi(() -> {
-                    account = current;
-                    authBusy = false;
-                    authStatus = remote ? null
-                            : "Cerraste sesión en este dispositivo. Revisa las conexiones en ChatGPT.";
-                    clearConversation();
-                    conversation.owner = null;
-                    showScreen(Screen.START);
-                });
-            } catch (IOException problem) {
-                onUi(() -> failAuth(problem));
-            }
+        authorization().signOut(session, revoked -> {
+            authBusy = false;
+            authStatus = revoked ? null
+                    : "Cerraste sesión en Aula IAG. Google no confirmó el retiro del permiso.";
+            render();
         });
     }
 
-    private void confirmPlanUse() {
-        if (!canUsePlan() || !account.planConfirmationPending()) {
-            return;
-        }
-        new AlertDialog.Builder(this)
-                .setTitle("Estás usando tu plan de ChatGPT")
-                .setMessage("Las consultas compatibles de Aula IAG usan tu plan. "
-                        + "Puedes revisar y ajustar el uso en la configuración de ChatGPT.")
-                .setCancelable(false)
-                .setPositiveButton("Entendido", (dialog, which) -> worker.execute(() -> {
-                    try {
-                        auth.acknowledgePlanConfirmation();
-                        ChatGptAuth.Account current = auth.activeAccount();
-                        onUi(() -> account = current);
-                    } catch (IOException problem) {
-                        onUi(() -> Toast.makeText(this,
-                                "No se guardó la confirmación.", Toast.LENGTH_SHORT).show());
-                    }
-                }))
-                .show();
-    }
-
-    private void failAuth(IOException problem) {
-        pendingAttempt = null;
-        authBusy = false;
-        authStatus = problem instanceof ChatGptAuth.AuthException ? problem.getMessage()
-                : "No se pudo verificar la cuenta. Revisa tu conexión y vuelve a intentar.";
-        render();
-    }
-
-    private boolean openLink(Uri url) {
+    private void openInstitutionalGemini() {
+        Intent browser = new Intent(Intent.ACTION_VIEW, INSTITUTIONAL_GEMINI)
+                .addCategory(Intent.CATEGORY_BROWSABLE);
+        browser.setSelector(new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_APP_BROWSER));
         try {
-            startActivity(new Intent(Intent.ACTION_VIEW, url).addCategory(Intent.CATEGORY_BROWSABLE));
-            return true;
-        } catch (ActivityNotFoundException error) {
-            Toast.makeText(this, "Necesitas un navegador para abrir este enlace.", Toast.LENGTH_LONG).show();
-            return false;
+            startActivity(browser);
+        } catch (ActivityNotFoundException exception) {
+            Toast.makeText(this, "Necesitas un navegador para abrir Gemini.", Toast.LENGTH_LONG).show();
         }
     }
 
