@@ -28,9 +28,15 @@ El chat de Aula IAG requiere un proyecto de Google Cloud autorizado para Gemini 
 2. En **Google Auth Platform**, configura la pantalla de consentimiento. Usa el público **Interno** si el proyecto está en la organización de la Universidad Nacional y la cuenta pertenece a ella. Para una aplicación externa en pruebas, agrega la cuenta institucional en **Usuarios de prueba**. Registra los alcances que solicita la app en **Acceso a datos**. Incluye `openid`, `https://www.googleapis.com/auth/userinfo.email`, `https://www.googleapis.com/auth/cloud-platform` y `https://www.googleapis.com/auth/generative-language.retriever`. [Configuración de consentimiento](https://developers.google.com/workspace/guides/configure-oauth-consent)
 3. En **Clientes**, crea un cliente OAuth de tipo **Android** con el nombre de paquete `com.aulaiag.reto11` y la huella SHA-1 del certificado que firma el APK instalado. En Windows, obtén la huella de la variante con `.\gradlew.bat :app:signingReport`. En macOS o Linux usa `./gradlew :app:signingReport`. Para un APK ya generado, usa `apksigner verify --print-certs nombre.apk`. Registra la nueva huella si cambia la firma. [Credenciales OAuth para Android](https://developers.google.com/identity/protocols/oauth2/native-app#android) · [apksigner](https://developer.android.com/tools/apksigner)
 4. En **IAM**, comprueba que la cuenta institucional tenga `serviceusage.services.use` en el proyecto. El rol **Service Usage Consumer** (`roles/serviceusage.serviceUsageConsumer`) concede ese permiso. [Permisos del proyecto de cuota](https://docs.cloud.google.com/docs/quotas/set-quota-project#permissions)
-5. En la pantalla inicial, pulsa **Configurar Gemini en Aula IAG**. En **Cuenta**, escribe el **ID del proyecto** y pulsa **Guardar proyecto**. Selecciona **Conectar cuenta UNAL** y autoriza tu cuenta institucional habilitada para ese proyecto. Al conectarte, pulsa **Abrir conversación**.
+5. En la pantalla inicial, pulsa **Configurar Gemini en Aula IAG**. En **Cuenta**, escribe el **ID del proyecto** y pulsa **Guardar proyecto**. Selecciona **Conectar cuenta UNAL** y autoriza tu cuenta institucional habilitada para ese proyecto. Al autorizar la cuenta, se abre el chat de Aula IAG.
 
 La primera consulta comprueba el acceso a Gemini API. La cuota y la disponibilidad dependen del proyecto. Si Google bloquea la autorización para una cuenta administrada, consulta al administrador de Google Workspace o al encargado del proyecto.
+
+## Verificación en el emulador
+
+La prueba se realizó en **Small Phone (API 37.1)** con una cuenta UNAL autorizada para usar Gemini API en Google Cloud. Desde el chat de Aula IAG se envió «Explica masa y peso en una frase con aula-6218». Gemini explicó la diferencia y el chat mostró el estado **Gemini · Conectado**.
+
+Para repetir la prueba, configura tu proyecto, autoriza tu cuenta UNAL y envía una pregunta desde el chat de Aula IAG. Comprueba que allí aparece la respuesta y que el estado cambia a **Gemini · Conectado**.
 
 ## Implementación
 
