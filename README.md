@@ -4,7 +4,9 @@ Aula IAG es una app Android de estudio en español para explicar conceptos, resu
 
 ## Diseño
 
-El diseño presenta el inicio, la demostración, el chat con Gemini y la configuración de cuenta. [Diseño de Aula IAG](docs/diseno-aula-iag.pdf)
+El inicio, el chat de estudio y la configuración de Gemini incorporan el verde institucional `#94B43B` y el verde complementario `#466B3F` de la Universidad Nacional de Colombia. [Paleta institucional de la UNAL](https://identidad.unal.edu.co/fileadmin/user_upload/manual/PALETA_DE_COLOR_INTITUCIONAL-2016.pdf)
+
+[Ver el diseño de Aula IAG en el emulador](docs/diseno-aula-iag.pdf)
 
 ## Ejecutar en Android Studio
 

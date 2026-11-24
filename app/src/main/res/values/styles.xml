@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.AulaIag" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:colorAccent">#466B3F</item>
+    </style>
+</resources>

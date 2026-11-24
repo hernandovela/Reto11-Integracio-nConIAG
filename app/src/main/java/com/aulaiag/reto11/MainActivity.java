@@ -28,7 +28,6 @@ import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
-import android.widget.Space;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -38,6 +37,7 @@ import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
+import static com.aulaiag.reto11.StudyUi.ACCENT;
 import static com.aulaiag.reto11.StudyUi.BACKGROUND;
 import static com.aulaiag.reto11.StudyUi.BORDER;
 import static com.aulaiag.reto11.StudyUi.ERROR;
@@ -45,6 +45,7 @@ import static com.aulaiag.reto11.StudyUi.GREEN;
 import static com.aulaiag.reto11.StudyUi.INK;
 import static com.aulaiag.reto11.StudyUi.LIGHT;
 import static com.aulaiag.reto11.StudyUi.MUTED;
+import static com.aulaiag.reto11.StudyUi.ON_DARK_MUTED;
 import static com.aulaiag.reto11.StudyUi.PAPER;
 import static com.aulaiag.reto11.StudyUi.QUESTION;
 
@@ -237,8 +238,10 @@ public final class MainActivity extends Activity {
             case CHAT -> buildChat();
             case ACCOUNT -> buildAccount();
         };
+        int width = getResources().getConfiguration().screenWidthDp >= 680
+                ? ui.dp(640) : ViewGroup.LayoutParams.MATCH_PARENT;
         root.addView(screen, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+                width, ViewGroup.LayoutParams.MATCH_PARENT, Gravity.TOP | Gravity.CENTER_HORIZONTAL));
         root.requestFocus();
     }
 
@@ -252,24 +255,23 @@ public final class MainActivity extends Activity {
 
     private View buildStart() {
         LinearLayout body = ui.column();
-        body.setPadding(ui.dp(24), ui.dp(32), ui.dp(24), ui.dp(22));
-        ImageView icon = new ImageView(this);
-        icon.setImageResource(R.drawable.ic_aula);
-        icon.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
-        body.addView(icon, new LinearLayout.LayoutParams(ui.dp(56), ui.dp(56)));
-        ui.block(body, ui.heading("Tu espacio\nde estudio", 36), 12);
-        ui.block(body, ui.text("Pregunta, resume y practica.\nEmpieza con el tema que quieras.",
-                16, MUTED, false), 12);
-        String access = hasProject()
-                ? "Conecta tu cuenta UNAL para usar Gemini en Aula IAG."
-                : "Abre Gemini en el navegador y elige tu cuenta institucional UNAL.";
-        ui.block(body, infoPanel("Estudia con Gemini", access), 32);
-        body.addView(new Space(this), new LinearLayout.LayoutParams(1, 0, 1f));
-        addStatus(body);
+        body.setPadding(ui.dp(20), ui.dp(16), ui.dp(20), ui.dp(24));
+        ui.block(body, brand(), 0);
 
+        LinearLayout hero = ui.column();
+        hero.setPadding(ui.dp(20), ui.dp(21), ui.dp(20), ui.dp(19));
+        hero.setBackground(ui.shape(INK, 0, 24));
+        View accent = new View(this);
+        accent.setBackground(ui.shape(ACCENT, 0, 2));
+        accent.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        hero.addView(accent, new LinearLayout.LayoutParams(ui.dp(34), ui.dp(3)));
+        ui.block(hero, ui.display("Tu espacio\nde estudio", 41, PAPER), 16);
+        ui.block(hero, ui.text("Pregunta, resume y practica.", 16, ON_DARK_MUTED, false), 10);
+
+        Button connect;
         if (hasProject()) {
             boolean resume = canChat() && !reconnectRequired();
-            Button connect = ui.button(resume ? "Volver a la conversación" : "Conectar cuenta UNAL",
+            connect = ui.button(resume ? "Volver a la conversación" : "Conectar cuenta UNAL",
                     true, () -> {
                         if (resume) {
                             enterLiveChat();
@@ -278,45 +280,65 @@ public final class MainActivity extends Activity {
                             connectAccount();
                         }
                     });
-            connect.setEnabled(!authBusy);
-            ui.block(body, connect, 22);
         } else {
-            ui.block(body, ui.button("Abrir Gemini institucional", true, this::openInstitutionalGemini), 22);
+            connect = ui.button("Abrir Gemini institucional", true, this::openInstitutionalGemini);
+            ui.arrow(connect, true);
         }
-        Button demo = ui.button("Probar demostración", false, this::enterDemo);
+        connect.setEnabled(!authBusy);
+        ui.block(hero, connect, 19);
+        if (!hasProject()) {
+            ui.block(hero, ui.text("Elige tu cuenta UNAL en el navegador.",
+                    13, ON_DARK_MUTED, false), 8);
+        }
+        ui.block(body, hero, 18);
+
+        LinearLayout options = ui.column();
+        options.setPadding(ui.dp(3), ui.dp(3), ui.dp(3), ui.dp(3));
+        options.setBackground(ui.shape(PAPER, BORDER, 18));
+        Button demo = ui.accessButton("Probar demostración", this::enterDemo);
         demo.setEnabled(!authBusy);
-        ui.block(body, demo, 10);
-        Button settings = ui.button("Configurar Gemini en Aula IAG", false,
-                () -> showScreen(Screen.ACCOUNT));
+        ui.block(options, demo, 0);
+        ui.rule(options, BORDER, 0);
+        Button settings = ui.accessButton("Configurar Gemini en Aula IAG", () -> showScreen(Screen.ACCOUNT));
         settings.setEnabled(!authBusy);
-        ui.block(body, settings, 10);
+        ui.block(options, settings, 0);
+        ui.block(body, options, 18);
+        addStatus(body);
         return page(body);
+    }
+
+    private LinearLayout brand() {
+        LinearLayout brand = ui.row();
+        ImageView icon = new ImageView(this);
+        icon.setImageResource(R.drawable.ic_aula);
+        icon.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        brand.addView(icon, new LinearLayout.LayoutParams(ui.dp(34), ui.dp(34)));
+
+        LinearLayout title = ui.column();
+        ui.block(title, ui.heading("Aula IAG", 19), 0);
+        ui.block(title, ui.text("Asistente de estudio", 12, MUTED, false), 0);
+        LinearLayout.LayoutParams titleSlot = new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        titleSlot.setMarginStart(ui.dp(9));
+        brand.addView(title, titleSlot);
+        return brand;
     }
 
     private View buildChat() {
         LinearLayout body = ui.column();
-        body.setPadding(ui.dp(16), ui.dp(8), ui.dp(16), ui.dp(8));
-        LinearLayout header = ui.row();
-        LinearLayout title = ui.column();
-        ui.block(title, ui.heading("Aula IAG", 22), 0);
-        ui.block(title, ui.text("Asistente de estudio", 12, MUTED, false), 0);
-        header.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        body.setPadding(ui.dp(16), ui.dp(7), ui.dp(16), ui.dp(8));
+        LinearLayout header = brand();
         Button newChat = ui.button("Nuevo", false, this::askNewConversation);
         newChat.setEnabled(!sending && !authBusy);
         addCompactButton(header, newChat);
         addCompactButton(header, ui.button("Cuenta", false, () -> showScreen(Screen.ACCOUNT)));
         ui.block(body, header, 0);
-
-        View divider = new View(this);
-        divider.setBackgroundColor(BORDER);
-        LinearLayout.LayoutParams line = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ui.dp(1));
-        line.topMargin = ui.dp(9);
-        body.addView(divider, line);
+        ui.rule(body, BORDER, 9);
 
         timeline = new ScrollView(this);
+        timeline.setClipToPadding(false);
         messageList = ui.column();
-        messageList.setPadding(0, ui.dp(6), 0, ui.dp(8));
+        messageList.setPadding(0, ui.dp(5), 0, ui.dp(10));
         timeline.addView(messageList, new ScrollView.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         body.addView(timeline, new LinearLayout.LayoutParams(
@@ -324,60 +346,81 @@ public final class MainActivity extends Activity {
 
         boolean chatActions = !sending && !authBusy
                 && (conversation.demo || canChat() && !reconnectRequired());
+        ui.block(body, buildComposer(chatActions), 5);
+        showMessages();
+        return body;
+    }
+
+    private View buildComposer(boolean chatActions) {
+        LinearLayout panel = ui.column();
+        panel.setBackground(ui.shape(PAPER, BORDER, 19));
+        panel.setPadding(ui.dp(9), ui.dp(7), ui.dp(9), ui.dp(8));
+
         LinearLayout shortcuts = ui.row();
         for (int index = 0; index < SHORTCUTS.length; index++) {
             int action = index;
-            Button button = ui.button(SHORTCUTS[index], false, () -> preparePrompt(action));
+            Button button = ui.shortcut(SHORTCUTS[index], () -> preparePrompt(action));
             button.setEnabled(chatActions);
-            button.setPadding(ui.dp(4), ui.dp(4), ui.dp(4), ui.dp(4));
             LinearLayout.LayoutParams slot = new LinearLayout.LayoutParams(
                     0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-            slot.setMarginStart(index == 0 ? 0 : ui.dp(6));
+            slot.setMarginStart(index == 0 ? 0 : ui.dp(5));
             shortcuts.addView(button, slot);
         }
-        ui.block(body, shortcuts, 3);
+        ui.block(panel, shortcuts, 0);
 
         LinearLayout inputRow = ui.row();
         inputRow.setGravity(Gravity.BOTTOM);
         composer = new EditText(this);
-        composer.setTextSize(15);
-        composer.setTextColor(INK);
-        composer.setHintTextColor(MUTED);
-        composer.setBackground(ui.shape(PAPER, BORDER, 17));
-        composer.setPadding(ui.dp(13), ui.dp(8), ui.dp(13), ui.dp(8));
-        composer.setMinHeight(ui.dp(53));
-        composer.setGravity(Gravity.CENTER_VERTICAL);
         composer.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE
                 | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
+        styleField(composer);
         composer.setMaxLines(4);
         composer.setHint("Escribe tu pregunta");
         composer.setFilters(new InputFilter[]{new InputFilter.LengthFilter(MAX_PROMPT_LENGTH)});
         composer.setText(conversation.draft);
         composer.setEnabled(chatActions);
-        if (Build.VERSION.SDK_INT >= 34) {
-            composer.setAutoHandwritingEnabled(false);
-        }
         inputRow.addView(composer, new LinearLayout.LayoutParams(
                 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         Button send = ui.button("Enviar", true, this::sendPrompt);
         send.setEnabled(chatActions);
         addCompactButton(inputRow, send);
-        ui.block(body, inputRow, 8);
+        ui.block(panel, inputRow, 6);
 
+        String status;
         if (conversation.demo) {
-            ui.block(body, ui.text("Demostración · ejemplos locales", 12, GREEN, true), 8);
+            status = "Demostración · ejemplos locales";
+        } else if (!canChat()) {
+            status = "Gemini · Conexión pendiente";
         } else {
-            String status;
-            if (!canChat()) {
-                status = "Gemini · Conexión pendiente";
-            } else {
-                status = conversation.geminiVerified
-                        ? "Gemini · Conectado" : "Gemini · Proyecto " + projectId;
-            }
-            ui.block(body, ui.text(status, 12, GREEN, true), 8);
+            status = conversation.geminiVerified
+                    ? "Gemini · Conectado" : "Gemini · Proyecto " + projectId;
         }
-        showMessages();
-        return body;
+        LinearLayout signal = ui.row();
+        View dot = new View(this);
+        dot.setBackground(ui.shape(conversation.demo || conversation.geminiVerified ? GREEN : MUTED,
+                0, 4));
+        dot.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        LinearLayout.LayoutParams marker = new LinearLayout.LayoutParams(ui.dp(7), ui.dp(7));
+        marker.setMarginStart(ui.dp(3));
+        marker.setMarginEnd(ui.dp(7));
+        signal.addView(dot, marker);
+        signal.addView(ui.text(status, 12, MUTED, true),
+                new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        ui.block(panel, signal, 7);
+        return panel;
+    }
+
+    private void styleField(EditText field) {
+        field.setTextSize(15);
+        field.setTextColor(INK);
+        field.setHintTextColor(MUTED);
+        field.setBackground(ui.field());
+        field.setPadding(ui.dp(12), ui.dp(7), ui.dp(12), ui.dp(7));
+        field.setMinHeight(ui.dp(48));
+        field.setGravity(Gravity.CENTER_VERTICAL);
+        if (Build.VERSION.SDK_INT >= 34) {
+            field.setAutoHandwritingEnabled(false);
+        }
     }
 
     private void addCompactButton(LinearLayout row, Button button) {
@@ -389,37 +432,39 @@ public final class MainActivity extends Activity {
 
     private View buildAccount() {
         LinearLayout body = ui.column();
-        body.setPadding(ui.dp(24), ui.dp(16), ui.dp(24), ui.dp(20));
+        body.setPadding(ui.dp(20), ui.dp(14), ui.dp(20), ui.dp(24));
         LinearLayout header = ui.row();
-        header.addView(ui.heading("Cuenta", 32), new LinearLayout.LayoutParams(
+        header.addView(ui.display("Cuenta", 37, INK), new LinearLayout.LayoutParams(
                 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         addCompactButton(header, ui.button("Volver", false, this::back));
         ui.block(body, header, 0);
+        ui.rule(body, BORDER, 9);
 
         GeminiAuth.Session session = conversation.session;
         String accountDetail = session == null ? "Sesión sin conectar" : session.email();
-        ui.block(body, infoPanel("Cuenta UNAL", accountDetail), 20);
+        LinearLayout identity = infoPanel("Cuenta UNAL", accountDetail);
         if (hasProject() && (session == null || reconnectRequired())) {
             Button connect = ui.button("Conectar cuenta UNAL", true, this::connectAccount);
             connect.setEnabled(!authBusy && !sending);
-            ui.block(body, connect, 12);
+            ui.block(identity, connect, 12);
         }
         if (canChat() && !reconnectRequired()) {
             Button openChat = ui.button("Abrir conversación", true, this::enterLiveChat);
             openChat.setEnabled(!authBusy && !sending);
-            ui.block(body, openChat, 12);
+            ui.block(identity, openChat, 12);
         }
         if (session != null && hasProject()) {
             Button switchAccount = ui.button("Cambiar cuenta", false, this::chooseAnotherAccount);
             switchAccount.setEnabled(!authBusy && !sending);
-            ui.block(body, switchAccount, 8);
+            ui.block(identity, switchAccount, 8);
         }
         if (session != null) {
             Button signOut = ui.button("Cerrar sesión en Aula IAG", false, this::signOut);
             signOut.setEnabled(!authBusy && !sending);
-            ui.block(body, signOut, 8);
+            ui.block(identity, signOut, 8);
         }
-        addStatus(body);
+        addStatus(identity);
+        ui.block(body, identity, 15);
 
         String projectDetail;
         if (!hasProject()) {
@@ -431,23 +476,23 @@ public final class MainActivity extends Activity {
         }
         LinearLayout project = infoPanel("Proyecto Google Cloud", projectDetail);
         EditText editor = new EditText(this);
-        editor.setTextColor(INK);
-        editor.setHintTextColor(MUTED);
-        editor.setTextSize(15);
         editor.setSingleLine(true);
         editor.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        styleField(editor);
         editor.setHint("ID del proyecto");
         editor.setText(projectId);
         editor.setEnabled(!authBusy && !sending);
-        ui.block(project, editor, 8);
+        ui.block(project, editor, 13);
         Button save = ui.button("Guardar proyecto", false, () -> saveProject(editor));
         save.setEnabled(!authBusy && !sending);
         ui.block(project, save, 8);
-        ui.block(body, project, 24);
+        ui.block(body, project, 12);
 
-        ui.block(body, ui.button("Abrir Gemini institucional", false, this::openInstitutionalGemini), 18);
+        Button portal = ui.button("Abrir Gemini institucional", false, this::openInstitutionalGemini);
+        ui.arrow(portal, true);
+        ui.block(body, portal, 16);
         ui.block(body, ui.text("Elige tu cuenta institucional UNAL en el navegador.",
-                14, MUTED, false), 6);
+                13, MUTED, false), 6);
         return page(body);
     }
 
@@ -475,9 +520,9 @@ public final class MainActivity extends Activity {
 
     private LinearLayout infoPanel(String title, String details) {
         LinearLayout panel = ui.column();
-        panel.setPadding(ui.dp(15), ui.dp(13), ui.dp(15), ui.dp(14));
-        panel.setBackground(ui.shape(LIGHT, 0, 18));
-        ui.block(panel, ui.text(title, 16, GREEN, true), 0);
+        panel.setPadding(ui.dp(15), ui.dp(14), ui.dp(15), ui.dp(14));
+        panel.setBackground(ui.shape(PAPER, BORDER, 18));
+        ui.block(panel, ui.heading(title, 18), 0);
         ui.block(panel, ui.text(details, 14, MUTED, false), 5);
         return panel;
     }
@@ -501,7 +546,12 @@ public final class MainActivity extends Activity {
             String detail = conversation.demo
                     ? "Prueba un atajo para cargar una pregunta de muestra."
                     : "Escribe una pregunta o elige un atajo para empezar.";
-            ui.block(messageList, infoPanel("¿Qué quieres aprender?", detail), 11);
+            LinearLayout welcome = ui.column();
+            welcome.setPadding(ui.dp(17), ui.dp(18), ui.dp(17), ui.dp(18));
+            welcome.setBackground(ui.shape(LIGHT, BORDER, 20));
+            ui.block(welcome, ui.display("¿Qué quieres aprender?", 29, INK), 0);
+            ui.block(welcome, ui.text(detail, 14, MUTED, false), 8);
+            ui.block(messageList, welcome, 12);
         }
         for (GeminiClient.Message message : conversation.messages) {
             addMessage(message.role().equals("user"), message.text(), true);
@@ -526,20 +576,28 @@ public final class MainActivity extends Activity {
     }
 
     private TextView addMessage(boolean fromUser, String contents, boolean selectable) {
-        ui.block(messageList, ui.text(fromUser ? "Tú" : "Aula IAG", 12, MUTED, true), 12);
-        TextView bubble = ui.text(contents, 15, INK, false);
-        bubble.setPadding(ui.dp(14), ui.dp(10), ui.dp(14), ui.dp(10));
-        bubble.setBackground(ui.shape(fromUser ? QUESTION : PAPER, fromUser ? 0 : BORDER, 17));
-        bubble.setTextIsSelectable(selectable);
-        ui.block(messageList, bubble, 4);
+        LinearLayout card = ui.column();
+        card.setPadding(ui.dp(14), ui.dp(11), ui.dp(14), ui.dp(10));
+        card.setBackground(ui.shape(fromUser ? QUESTION : PAPER, fromUser ? 0 : BORDER, 17));
+        ui.block(card, ui.text(fromUser ? "Tú" : "Aula IAG", 12, GREEN, true), 0);
+        TextView message = ui.text(contents, 15, INK, false);
+        message.setTextIsSelectable(selectable);
+        ui.block(card, message, 5);
         if (!fromUser && selectable) {
             Button copy = ui.button("Copiar", false, () -> copy(contents));
-            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams copyParams = new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-            params.topMargin = ui.dp(4);
-            messageList.addView(copy, params);
+            copyParams.gravity = Gravity.END;
+            copyParams.topMargin = ui.dp(7);
+            card.addView(copy, copyParams);
         }
-        return bubble;
+        LinearLayout.LayoutParams cardParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        cardParams.topMargin = ui.dp(11);
+        cardParams.setMarginStart(fromUser ? ui.dp(23) : 0);
+        cardParams.setMarginEnd(fromUser ? 0 : ui.dp(12));
+        messageList.addView(card, cardParams);
+        return message;
     }
 
     private void copy(String contents) {

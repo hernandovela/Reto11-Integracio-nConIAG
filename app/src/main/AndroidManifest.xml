@@ -8,7 +8,7 @@
         android:enableOnBackInvokedCallback="true"
         android:icon="@drawable/ic_aula"
         android:label="Aula IAG"
-        android:theme="@android:style/Theme.Material.Light.NoActionBar"
+        android:theme="@style/Theme.AulaIag"
         android:usesCleartextTraffic="false">
         <activity
             android:name=".MainActivity"
